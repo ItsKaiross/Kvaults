@@ -3,21 +3,22 @@ import string
 import tkinter as tk
 from tkinter import ttk, messagebox
 from storage import unlock, save, save_entry, delete_entry
+from logo_service import LogoService
 
 # ── Design Tokens ─────────────────────────────────────────────────────────────
-BG        = "#0f0f13"
-CARD      = "#1a1a24"
-CARD2     = "#22223a"
-BORDER    = "#2e2e45"
-ACCENT    = "#6c63ff"
-ACCENT_H  = "#8b85ff"
-ACCENT_DIM= "#3d3880"
-FG        = "#e8e8f0"
-FG_SUB    = "#9090a8"
-FG_DIM    = "#55556a"
-SUCCESS   = "#4ade80"
-DANGER    = "#f87171"
-WARN      = "#fbbf24"
+BG        = "#0B0D12"
+CARD      = "#121620"
+CARD2     = "#1A2030"
+BORDER    = "#252C3D"
+ACCENT    = "#7C6FF7"
+ACCENT_H  = "#9388FF"
+ACCENT_DIM= "#342F6B"
+FG        = "#F4F6FB"
+FG_SUB    = "#A6AFC3"
+FG_DIM    = "#69738A"
+SUCCESS   = "#2CB67D"
+DANGER    = "#FF6B7A"
+WARN      = "#F5B942"
 
 FONT      = "Segoe UI"
 
@@ -100,7 +101,7 @@ def apply_styles(root):
     s.theme_use("clam")
     s.configure("Vault.Treeview",
                 background=CARD, foreground=FG,
-                fieldbackground=CARD, rowheight=44,
+                fieldbackground=CARD, rowheight=54,
                 font=(FONT, 10), borderwidth=0, relief="flat")
     s.configure("Vault.Treeview.Heading",
                 background=BG, foreground=FG_DIM,
@@ -447,6 +448,9 @@ class VaultScreen(tk.Frame):
         self.salt       = salt
         self._toast_job = None
         self._lock_job  = None
+        self.logo_service = LogoService(self)
+        self._tree_logos = {}
+        self._detail_logo = None
         self.pack(fill="both", expand=True)
         self._build()
         self._refresh()
@@ -472,7 +476,7 @@ class VaultScreen(tk.Frame):
 
     def _build(self):
         # ── Sidebar ──
-        sidebar = tk.Frame(self, bg=CARD, width=220)
+        sidebar = tk.Frame(self, bg=CARD, width=232)
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
@@ -483,8 +487,8 @@ class VaultScreen(tk.Frame):
         c.pack()
         c.create_oval(2, 2, 34, 34, fill=ACCENT_DIM, outline=ACCENT, width=1)
         c.create_text(18, 18, text="🔐", font=(FONT, 14))
-        mk_label(logo, "Kvaults", size=13, bold=True, bg=CARD).pack(pady=(6, 0))
-        mk_label(logo, "Password Vault", size=8, color=FG_DIM, bg=CARD).pack()
+        mk_label(logo, "Kvaults", size=15, bold=True, bg=CARD).pack(pady=(6, 0))
+        mk_label(logo, "Private by design", size=8, color=FG_DIM, bg=CARD).pack()
 
         mk_separator(sidebar, BORDER).pack(fill="x", padx=16)
 
@@ -565,8 +569,11 @@ class VaultScreen(tk.Frame):
         # Top bar
         topbar = tk.Frame(content, bg=BG, padx=24)
         topbar.pack(fill="x")
-        mk_label(topbar, "All Passwords", size=16, bold=True).pack(
-            side="left", anchor="center", pady=16)
+        title = tk.Frame(topbar, bg=BG)
+        title.pack(side="left", pady=18)
+        mk_label(title, "Your vault", size=18, bold=True).pack(anchor="w")
+        mk_label(title, "Search and manage every saved login", size=8,
+                 color=FG_DIM).pack(anchor="w")
 
         # Search — same height as title, anchored center
         search_outer = tk.Frame(topbar, bg=CARD2, highlightthickness=1,
@@ -591,11 +598,13 @@ class VaultScreen(tk.Frame):
         self.table_frame.pack(fill="both", expand=True)
         table_frame = self.table_frame
 
-        cols = ("icon", "name", "username", "url", "strength")
-        self.tree = ttk.Treeview(table_frame, columns=cols, show="headings",
+        cols = ("name", "username", "url", "strength")
+        self.tree = ttk.Treeview(table_frame, columns=cols, show="tree headings",
                                  style="Vault.Treeview", selectmode="browse")
 
-        headers = [("icon", "", 40), ("name", "Name", 180),
+        self.tree.heading("#0", text="", anchor="center")
+        self.tree.column("#0", width=58, minwidth=58, stretch=False, anchor="center")
+        headers = [("name", "Service", 180),
                    ("username", "Username", 200), ("url", "URL", 200),
                    ("strength", "Strength", 100)]
         for col, head, w in headers:
@@ -752,6 +761,10 @@ class VaultScreen(tk.Frame):
         site   = data.get("site", name.split("::")[0])
         letter = site[0].upper() if site else "?"
         self.d_icon.itemconfig("letter", text=letter)
+        self.logo_service.request(
+            site, data.get("url", ""), 40,
+            lambda image, key=name: self._set_detail_logo(key, image),
+        )
         self.d_name.config(text=site)
         self.d_sub.config(text=data.get("username", "") or data.get("url", "") or "No details")
 
@@ -795,11 +808,8 @@ class VaultScreen(tk.Frame):
     def _refresh(self):
         q = self.search_var.get().lower()
         self.tree.delete(*self.tree.get_children())
-        icons = ["🔵", "🟣", "🟢", "🟡", "🔴", "🟠"]
         weak = 0
         last = ""
-        site_colors = {}
-        color_list = ["#6c63ff", "#f87171", "#4ade80", "#fbbf24", "#60a5fa", "#f472b6"]
         for i, (key, data) in enumerate(self.entries.items()):
             site = data.get("site", key.split("::")[0])
             user = data.get("username", "")
@@ -809,17 +819,17 @@ class VaultScreen(tk.Frame):
             score, slabel, _ = password_strength(pw)
             if score <= 2:
                 weak += 1
-            # Assign a consistent color per site
-            if site not in site_colors:
-                site_colors[site] = color_list[len(site_colors) % len(color_list)]
-            icon = icons[i % len(icons)]
             tag = "odd" if i % 2 else "even"
             self.tree.insert("", "end", iid=key, tags=(tag,), values=(
-                icon, site,
+                site,
                 user,
                 data.get("url", "") or "—",
                 slabel or "—",
             ))
+            self.logo_service.request(
+                site, data.get("url", ""), 32,
+                lambda image, item=key: self._set_tree_logo(item, image),
+            )
             last = site
 
         count = len(self.tree.get_children())
@@ -835,6 +845,19 @@ class VaultScreen(tk.Frame):
         else:
             self.empty_frame.place_forget()
             self.table_frame.pack(fill="both", expand=True)
+
+    def _set_tree_logo(self, item, image):
+        if self.tree.exists(item):
+            self._tree_logos[item] = image
+            self.tree.item(item, image=image)
+
+    def _set_detail_logo(self, item, image):
+        selection = self.tree.selection()
+        if not selection or selection[0] != item:
+            return
+        self._detail_logo = image
+        self.d_icon.delete("logo")
+        self.d_icon.create_image(22, 22, image=image, tags="logo")
 
     def _selected(self):
         sel = self.tree.selection()
@@ -1121,5 +1144,3 @@ class App(tk.Tk):
 
 if __name__ == "__main__":
     App().mainloop()
-
-
