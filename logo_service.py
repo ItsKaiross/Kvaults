@@ -16,6 +16,10 @@ from PIL import Image, ImageDraw, ImageFont, ImageTk
 class LogoService:
     """Render bundled SVG brand marks without making network requests."""
 
+    LOCAL_ALIASES = {
+        "valorant": "valorant.svg",
+    }
+
     def __init__(self, widget, logo_dir: str | Path | None = None):
         self.widget = widget
         bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -24,7 +28,7 @@ class LogoService:
         self.images = {}
 
     def _load_manifest(self):
-        aliases = {}
+        aliases = dict(self.LOCAL_ALIASES)
         manifest_path = self.logo_dir / "manifest.json"
         try:
             catalog = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
