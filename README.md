@@ -15,7 +15,7 @@ A local, encrypted password manager built with Python and Tkinter. Your password
 - **Backup & restore** — export/import your vault as a `.db` file
 - **Clipboard safety** — copied passwords auto-clear after 30 seconds
 - **Dark UI** — clean, modern dark theme built with Tkinter
-- **Brand logos** — saved services use cached logos from the public SVGL API, with offline monogram fallbacks
+- **Offline brand logos** — the complete SVGL catalog is bundled and rendered locally, with monogram fallbacks for unknown services
 
 ## Screenshots
 

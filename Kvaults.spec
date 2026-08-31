@@ -5,7 +5,7 @@ a = Analysis(
     ['vault.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('assets/logos', 'assets/logos')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

@@ -1,110 +1,85 @@
-"""Asynchronous, cached brand-logo lookup backed by the public SVGL API."""
+"""Local, bundled brand-logo lookup with offline monogram fallbacks."""
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
-import queue
 import re
-import threading
-import urllib.parse
-import urllib.request
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
 import cairosvg
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
-SVGL_API = "https://api.svgl.app"
-
 
 class LogoService:
-    def __init__(self, widget, cache_dir: str | Path = ".logo_cache"):
+    """Render bundled SVG brand marks without making network requests."""
+
+    def __init__(self, widget, logo_dir: str | Path | None = None):
         self.widget = widget
-        self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(exist_ok=True)
+        bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        self.logo_dir = Path(logo_dir) if logo_dir else bundle_root / "assets" / "logos"
+        self.logo_aliases = self._load_manifest()
         self.images = {}
-        self._pending = {}
-        self._results = queue.Queue()
-        self.widget.after(100, self._poll)
+
+    def _load_manifest(self):
+        aliases = {}
+        manifest_path = self.logo_dir / "manifest.json"
+        try:
+            catalog = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return aliases
+        # Exact product names always win over incidental hosting domains
+        # (many projects point to github.com without being the GitHub product).
+        for item in catalog:
+            filename = item.get("file")
+            if not filename:
+                continue
+            title = self._normalise(item.get("title", ""))
+            if title:
+                aliases[title] = filename
+        for item in catalog:
+            filename = item.get("file")
+            if not filename:
+                continue
+            host = urlparse(item.get("url", "")).hostname or ""
+            host = host.lower().removeprefix("www.")
+            if host:
+                aliases.setdefault(self._normalise(host), filename)
+                for part in host.split(".")[:-1]:
+                    if part not in {"www", "app", "mail", "accounts"}:
+                        aliases.setdefault(self._normalise(part), filename)
+        return aliases
 
     def request(self, site: str, url: str, size: int, callback) -> None:
         key = (self._identity(site, url), size)
-        if key in self.images:
-            callback(self.images[key])
-            return
-        self.images[key] = self._placeholder(site, size)
+        if key not in self.images:
+            self.images[key] = self._load_logo(site, url, size)
         callback(self.images[key])
-        if key in self._pending:
-            self._pending[key].append(callback)
-            return
-        self._pending[key] = [callback]
 
-        def worker():
+    def _load_logo(self, site: str, url: str, size: int):
+        logo_name = self._logo_name(site, url)
+        logo_path = self.logo_dir / logo_name if logo_name else None
+        if logo_path and logo_path.is_file():
             try:
-                png = self._fetch_png(site, url, size)
-            except Exception:
-                png = None
-            self._results.put((key, png))
+                png = cairosvg.svg2png(
+                    bytestring=logo_path.read_bytes(),
+                    output_width=size,
+                    output_height=size,
+                )
+                return ImageTk.PhotoImage(Image.open(io.BytesIO(png)).convert("RGBA"))
+            except (OSError, ValueError):
+                pass
+        return self._placeholder(site, size)
 
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _poll(self):
-        try:
-            while True:
-                key, png = self._results.get_nowait()
-                self._finish(key, png)
-        except queue.Empty:
-            pass
-        if self.widget.winfo_exists():
-            self.widget.after(100, self._poll)
-
-    def _finish(self, key, png):
-        callbacks = self._pending.pop(key, [])
-        if png:
-            image = Image.open(io.BytesIO(png)).convert("RGBA")
-            self.images[key] = ImageTk.PhotoImage(image)
-        for callback in callbacks:
-            callback(self.images[key])
-
-    def _fetch_png(self, site: str, url: str, size: int):
-        identity = self._identity(site, url)
-        digest = hashlib.sha256(f"{identity}:{size}".encode()).hexdigest()[:20]
-        cached = self.cache_dir / f"{digest}.png"
-        if cached.exists():
-            return cached.read_bytes()
-        query = urllib.parse.quote(site.strip())
-        req = urllib.request.Request(
-            f"{SVGL_API}?search={query}", headers={"User-Agent": "Kvaults/1.0"}
-        )
-        with urllib.request.urlopen(req, timeout=5) as response:
-            results = json.load(response)
-        match = self._best_match(results, site, url)
-        if not match:
-            return None
-        route = match.get("route")
-        if isinstance(route, dict):
-            route = route.get("dark") or route.get("light")
-        if not route:
-            return None
-        req = urllib.request.Request(route, headers={"User-Agent": "Kvaults/1.0"})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            svg = response.read()
-        png = cairosvg.svg2png(bytestring=svg, output_width=size, output_height=size)
-        cached.write_bytes(png)
-        return png
-
-    @staticmethod
-    def _best_match(results, site, url):
-        wanted = LogoService._normalise(site)
+    def _logo_name(self, site: str, url: str):
         host = urlparse(url if "://" in url else f"https://{url}").hostname or ""
-        host_brand = LogoService._normalise(host.split(".")[-2] if "." in host else host)
-        for item in results:
-            title = LogoService._normalise(item.get("title", ""))
-            item_host = urlparse(item.get("url", "")).hostname or ""
-            if title == wanted or (host_brand and host_brand in LogoService._normalise(item_host)):
-                return item
+        candidates = [site, host.lower().removeprefix("www."), *host.lower().split(".")]
+        for candidate in candidates:
+            filename = self.logo_aliases.get(self._normalise(candidate))
+            if filename:
+                return filename
         return None
 
     @staticmethod
